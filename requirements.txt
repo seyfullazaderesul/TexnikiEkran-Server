@@ -1,0 +1,3 @@
+# auth_server.py qəsdən YALNIZ Python standart kitabxanasından istifadə edir
+# (heç bir üçüncü-tərəf asılılıq yoxdur) — bu fayl boşdur, sadəcə Render-in
+# "pip install -r requirements.txt" build addımının uğurla keçməsi üçün var.

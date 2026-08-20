@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.db
+*.db-journal
+*.log
+backups/
+api_key.txt
+telegram_token.txt
+latest_version.txt

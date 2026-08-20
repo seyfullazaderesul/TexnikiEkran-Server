@@ -1,0 +1,35 @@
+# Render.com Blueprint — https://render.com/docs/blueprint-spec
+#
+# İSTİFADƏ: bu repo-nu GitHub-a push edin, Render-də "New +" → "Blueprint" →
+# repo-nu seçin. Render bu faylı avtomatik oxuyub xidməti qurur — dashboard-da
+# yalnız aşağıda "sync: false" işarəli iki sirri (CSG_API_KEY, CSG_TG_TOKEN)
+# əl ilə daxil etməlisiniz.
+#
+# QEYD: "plan: starter" Render-in indiki ən ucuz ÖDƏNİŞLİ planının adıdır —
+# PULSUZ PLAN İŞLƏMİR (15 dəq hərəkətsizlikdən sonra "yatır", canlı ekran-
+# paylaşımı relay bağlantılarını öldürür). Plan adları dəyişə bilər —
+# dashboard-da təsdiq/düzəliş edin.
+
+services:
+  - type: web
+    name: texnikiekran-auth
+    env: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python auth_server.py"
+    healthCheckPath: /api/health
+    envVars:
+      - key: CSG_HOST
+        value: "0.0.0.0"
+      - key: CSG_DB
+        value: /var/data/server_users.db
+      - key: CSG_BACKUP_DIR
+        value: /var/data/backups
+      - key: CSG_API_KEY
+        sync: false   # Dashboard-da ƏL İLƏ daxil edin — kodda/repo-da HEÇ VAXT saxlanmasın
+      - key: CSG_TG_TOKEN
+        sync: false   # (istəyə bağlı) Telegram DƏSTƏK körpüsü istifadə olunursa
+    disk:
+      name: texnikiekran-data
+      mountPath: /var/data
+      sizeGB: 1
