@@ -148,17 +148,32 @@ class Relay:
 
         with self._lock:
             current = self._slots.get(key)
-            if current is not slot or current.peer is not None:
-                pass   # ilk tərəf bu aralıqda vaxtı bitib silinib — aşağıda yenidən "ilk" kimi başla
-            else:
+            paired = current is slot and current.peer is None
+            if paired:
                 del self._slots[key]
                 slot.peer = my_conn
                 slot.event.set()
-                try:
-                    pump(slot.conn, my_conn)
-                finally:
-                    slot.pump_done.set()
-                return
+
+        # VACİB (real tapılmış İKİNCİ bug, birincisi (double-pump) qədər
+        # ciddi): `pump()` `self._lock`-u TUTARAQ ÇAĞIRILA BİLMƏZ —
+        # `self._lock` BÜTÜN `Relay` instansiyası üçün TƏK, QLOBAL kiliddir
+        # (bütün token/kanallar arasında paylaşılır), `pump()` isə bir
+        # ekran-paylaşımı kanalının BÜTÜN ömrü boyu (bəzən əbədi, qarşı
+        # tərəf öz istiqamətini heç vaxt bağlamasa) BLOKLAYIR. Kilid
+        # tutulmuş vəziyyətdə çağırılsa, bu SEANS bitənə qədər HEÇ BİR YENİ
+        # `rendezvous_and_pump` çağırışı (İSTƏNİLƏN başqa token/kanal daxil)
+        # `self._lock`-u ala BİLMƏZ — bütün sistemi TƏK bir aktiv seansa
+        # görə dondurur (real reproduksiya: 2-ci ardıcıl ekran-paylaşımı
+        # seansı 1-ci hələ açıqkən əbədi "kadr gözlənilir" vəziyyətində
+        # qalırdı). Ona görə `pump()` `with self._lock:` blokunun XARİCİNDƏ
+        # çağırılır — kilid YALNIZ slot lüğətinin özünü qorumaq üçündür,
+        # məlumat ötürməsini YOX.
+        if paired:
+            try:
+                pump(slot.conn, my_conn)
+            finally:
+                slot.pump_done.set()
+            return
         self.rendezvous_and_pump(key, my_conn, timeout)
 
 

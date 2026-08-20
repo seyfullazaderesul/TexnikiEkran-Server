@@ -1258,45 +1258,6 @@ def do_admin_chat_send(token: str, body: dict) -> dict:
     return {"ok": True, "id": mid}
 
 
-def do_remote_access_notify(token: str, body: dict) -> dict:
-    """Müştərinin RDP uzaqdan-giriş vəziyyətini operatora Telegram ilə çatdırır.
-
-    Server heç bir parolu/İP-ni SAXLAMIR — sadəcə ötürür (chat_send-dəki
-    notify_operator ilə eyni prinsip).
-    """
-    user = user_for_token(token)
-    if not user:
-        raise ApiError(401, "Sessiya bitib. Yenidən login edin.")
-    op = state_get("tg_operator", "")
-    if not op:
-        raise ApiError(409, "Operator hələ qeydə alınmayıb (Telegram botla /start yazılmayıb).")
-
-    action = (body.get("action") or "").strip()
-    ip = (body.get("ip") or "naməlum").strip()
-    username = (body.get("username") or "").strip()
-
-    if action == "grant":
-        password = (body.get("password") or "").strip()
-        port = int(body.get("port") or 3389)
-        minutes = int(body.get("expires_minutes") or 0)
-        lines = [
-            "🖥 UZAQDAN GİRİŞ (RDP) AÇILDI",
-            f"👤 Müştəri: {user['username']}",
-            f"🌐 IP: {ip}:{port}",
-            f"🔑 İstifadəçi: {username}",
-            f"🔒 Müvəqqəti parol: {password}",
-        ]
-        if minutes > 0:
-            lines.append(f"⏱ {minutes} dəqiqə sonra avtomatik bağlanacaq.")
-        tg_send(op, "\n".join(lines))
-    elif action == "revoke":
-        tg_send(op, f"🔒 Uzaqdan giriş bağlandı — müştəri: {user['username']}")
-    else:
-        raise ApiError(400, "Naməlum action.")
-
-    return {"ok": True}
-
-
 def do_screen_share_notify(token: str, body: dict) -> dict:
     """Müştərinin ekran-paylaşımı token-ini qeydə alır (özünə-xidmət
     "Başlat" axını üçün — operator bunu `do_get_screen_share_session`
@@ -1620,8 +1581,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, do_chat_send(token, body))
             elif self.path == "/api/admin/chat/send":
                 self._send(200, do_admin_chat_send(token, body))
-            elif self.path == "/api/remote-access/notify":
-                self._send(200, do_remote_access_notify(token, body))
             elif self.path == "/api/screen-share/notify":
                 self._send(200, do_screen_share_notify(token, body))
             elif self.path == "/api/connect-code/set":
