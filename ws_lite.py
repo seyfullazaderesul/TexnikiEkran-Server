@@ -7,14 +7,10 @@ QEYD: bu faylın EYNİ nüsxəsi `server/ws_lite.py`-də də saxlanılır (clien
 və server AYRI-AYRI yerlərə paylanır — paylaşılan paket mümkün deyil).
 Birində düzəliş etsən, DİGƏRİNDƏ də et.
 
-Nə DƏSTƏKLƏNMİR (qəsdən, RFC 6455-ə görə QANUNİ sadələşdirmə — çünki hər
-iki ucu ÖZÜMÜZ yazırıq, ictimai/naməlum kliyentlərlə uzlaşma lazım deyil):
-- Fraqmentasiya (FIN=0 davam frame-ləri) — §5.4: "An endpoint MUST be
-  capable of handling control frames in the middle of a fragmented
-  message" YALNIZ fraqmentasiya edən tərəflər üçün tələb olunur; biz heç
-  vaxt fraqmentasiya ETMİRİK, ona görə buna ehtiyac yoxdur.
-- Mətn (TEXT) frame-lər — yalnız BINARY (opcode 0x2) işlədilir, bütün
-  ötürülən data artıq bytes formatındadır (JPEG/JSON-UTF8/fayl bytes).
+Nə DƏSTƏKLƏNMİR:
+- Mətn (TEXT) frame-lər ÖZÜMÜZ göndərmirik — yalnız BINARY (opcode 0x2)
+  işlədilir, bütün ötürülən data artıq bytes formatındadır (JPEG/JSON-UTF8/
+  fayl bytes). Qəbulda TEXT-i BINARY kimi qəbul edirik (zərəri yoxdur).
 - Sıxılma genişlənmələri (permessage-deflate), alt-protokol danışığı.
 
 Nə MÜTLƏQ dəstəklənir (BURAXILA BİLMƏZ, "sadə binary keçid" görünsə də):
@@ -29,6 +25,16 @@ Nə MÜTLƏQ dəstəklənir (BURAXILA BİLMƏZ, "sadə binary keçid" görünsə
   PONG cavabı bu modulun ÖZÜ tərəfindən verilir (çağıran heç nə etmir).
 - Naməlum/CLOSE control frame-lərin ölçüyə görə düzgün keçilməsi — əks
   halda bir gözlənilməz frame bütün sonrakı axını səssizcə korlayır.
+- **Fraqmentasiyanı QƏBUL ETMƏK (FIN=0 + CONTINUATION yığmaq)** — biz
+  ÖZÜMÜZ heç vaxt fraqmentasiya ETMİRİK (`encode_frame` həmişə FIN=1
+  göndərir), AMMA real Render sınağında tapıldı ki, Render-in edge
+  proksisi WS-i raw TCP kimi KEÇİRMİR — özü tam WS-i anlayan bir vasitəçi
+  kimi çıxış edir və bir neçə KB-dan böyük mesajları ÖZÜ RFC 6455
+  fraqmentasiyası ilə YENİDƏN çərçivələyir (məs. bizim ~5.4KB JPEG
+  kadrlarımız FIN=0 BINARY + FIN=1 CONTINUATION cütünə bölünürdü). Bunu
+  nəzərə almadan `recv()` "dəstəklənmir" xətası atırdı və HEÇ BİR kadr
+  keçmirdi (yerli test — sıfır şəbəkə vasitəçisi — bunu heç vaxt aşkar
+  etmədi). `recv()` indi fraqmentləri yığır (bax aşağıda).
 """
 
 from __future__ import annotations
@@ -218,7 +224,19 @@ class WSConnection:
     def recv(self) -> bytes:
         """Növbəti TAM binary mesajı qaytarır. PING/PONG şəffaf idarə
         olunur (çağırana heç vaxt göstərilmir). Bağlantı bağlanıbsa
-        (CLOSE frame və ya EOF) WSClosed atır."""
+        (CLOSE frame və ya EOF) WSClosed atır.
+
+        QEYD (real Render sınağında tapılan həqiqət): biz özümüz heç vaxt
+        fraqmentasiya ETMİRİK, AMMA Render-in edge proksisi WS bağlantısını
+        raw TCP kimi KEÇİRMİR — özü WS-i tam anlayan bir vasitəçi kimi
+        çıxış edir və böyük (bir neçə KB-dan artıq) mesajları ÖZÜ RFC 6455
+        fraqmentasiyası (FIN=0 + CONTINUATION frame-ləri) ilə YENİDƏN
+        çərçivələyir. Ona görə `recv()` fraqmentləri YIĞMALIDIR — bu artıq
+        könüllü bir "sadələşdirmə" deyil, real şəbəkə mühiti üçün
+        MƏCBURİDİR. Fraqmentlər arasında control frame-lər (PING/PONG/
+        CLOSE) gələ bilər (RFC 6455 §5.4) — bunlar şəffaf idarə olunur."""
+        parts: list[bytes] = []
+        msg_opcode: int | None = None
         while True:
             try:
                 header = _read_exact(self._read, 2)
@@ -231,10 +249,6 @@ class WSConnection:
             masked = bool(b1 & 0x80)
             length = b1 & 0x7F
 
-            print(f"[ws-debug] recv header={header.hex()} fin={fin} opcode={opcode} masked={masked} length7={length} is_client={not self._expect_masked}")
-
-            if not fin:
-                raise WSError("Fraqmentasiya edilmiş frame alındı — dəstəklənmir.")
             if masked != self._expect_masked:
                 raise WSError(f"Gözlənilməyən maskalama vəziyyəti (masked={masked}).")
 
@@ -259,11 +273,21 @@ class WSConnection:
             if opcode == OP_CLOSE:
                 self._closed = True
                 raise WSClosed("Qarşı tərəf CLOSE frame göndərdi.")
-            if opcode == OP_BINARY:
-                return payload
-            if opcode == OP_TEXT:
-                return payload
-            raise WSError(f"Dəstəklənməyən/gözlənilməyən opcode: {opcode}")
+
+            if opcode == OP_CONTINUATION:
+                if msg_opcode is None:
+                    raise WSError("Gözlənilməyən CONTINUATION frame (başlanmamış mesaj).")
+                parts.append(payload)
+            elif opcode in (OP_BINARY, OP_TEXT):
+                if msg_opcode is not None:
+                    raise WSError("Əvvəlki fraqmentləşmiş mesaj bitmədən yenisi başladı.")
+                msg_opcode = opcode
+                parts.append(payload)
+            else:
+                raise WSError(f"Dəstəklənməyən/gözlənilməyən opcode: {opcode}")
+
+            if fin:
+                return b"".join(parts)
 
     def ping(self) -> None:
         if not self._closed:
