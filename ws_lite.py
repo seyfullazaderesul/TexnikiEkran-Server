@@ -231,6 +231,8 @@ class WSConnection:
             masked = bool(b1 & 0x80)
             length = b1 & 0x7F
 
+            print(f"[ws-debug] recv header={header.hex()} fin={fin} opcode={opcode} masked={masked} length7={length} is_client={not self._expect_masked}")
+
             if not fin:
                 raise WSError("Fraqmentasiya edilmiş frame alındı — dəstəklənmir.")
             if masked != self._expect_masked:
