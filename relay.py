@@ -130,8 +130,11 @@ class Relay:
             else:
                 am_first = False
 
+        print(f"[relay-debug] key={key} am_first={am_first}")
+
         if am_first:
             if not slot.event.wait(timeout):
+                print(f"[relay-debug] key={key} FIRST timed out waiting for peer")
                 with self._lock:
                     if self._slots.get(key) is slot:
                         del self._slots[key]
@@ -143,7 +146,9 @@ class Relay:
             # İkinci tərəf artıq pump-u başladıb (ya da elə indi başladır)
             # — biz sadəcə o bitənə qədər bu HTTP handler thread-ini
             # (və beləliklə socket-i) açıq saxlayırıq.
+            print(f"[relay-debug] key={key} FIRST: peer arrived, waiting on pump_done")
             slot.pump_done.wait()
+            print(f"[relay-debug] key={key} FIRST: pump_done set, returning")
             return
 
         with self._lock:
@@ -154,9 +159,11 @@ class Relay:
                 del self._slots[key]
                 slot.peer = my_conn
                 slot.event.set()
+                print(f"[relay-debug] key={key} SECOND: calling pump()")
                 try:
                     pump(slot.conn, my_conn)
                 finally:
+                    print(f"[relay-debug] key={key} SECOND: pump() returned")
                     slot.pump_done.set()
                 return
         self.rendezvous_and_pump(key, my_conn, timeout)
@@ -173,13 +180,16 @@ def pump(conn_a, conn_b) -> None:
     """
     stop = threading.Event()
 
-    def _forward(src, dst):
+    def _forward(src, dst, label):
+        n = 0
         try:
             while not stop.is_set():
                 data = src.recv()
+                n += 1
+                print(f"[relay-debug] pump/{label}: forwarded msg #{n} ({len(data)} bytes)")
                 dst.send(data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[relay-debug] pump/{label}: exception after {n} msgs: {type(e).__name__}: {e}")
         finally:
             stop.set()
             try:
@@ -191,8 +201,8 @@ def pump(conn_a, conn_b) -> None:
             except Exception:
                 pass
 
-    t1 = threading.Thread(target=_forward, args=(conn_a, conn_b), daemon=True)
-    t2 = threading.Thread(target=_forward, args=(conn_b, conn_a), daemon=True)
+    t1 = threading.Thread(target=_forward, args=(conn_a, conn_b, "a->b"), daemon=True)
+    t2 = threading.Thread(target=_forward, args=(conn_b, conn_a, "b->a"), daemon=True)
     t1.start()
     t2.start()
     t1.join()

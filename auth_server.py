@@ -1548,11 +1548,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         try:
-            peer = _RELAY.rendezvous((token, channel), conn, timeout=relay.SLOT_TIMEOUT)
-            if peer is None:
-                conn.close()
-                return
-            relay.pump(conn, peer)
+            _RELAY.rendezvous_and_pump((token, channel), conn, timeout=relay.SLOT_TIMEOUT)
         except Exception as e:
             print(f"[relay] gözlənilməyən xəta: {e}")
             try:
