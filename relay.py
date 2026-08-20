@@ -23,13 +23,14 @@ SWEEP_INTERVAL = 10.0
 
 
 class _Slot:
-    __slots__ = ("conn", "event", "peer", "created")
+    __slots__ = ("conn", "event", "peer", "created", "pump_done")
 
     def __init__(self, conn):
         self.conn = conn
         self.event = threading.Event()
         self.peer = None
         self.created = time.time()
+        self.pump_done = threading.Event()
 
 
 class Relay:
@@ -101,6 +102,64 @@ class Relay:
                 slot.event.set()
                 return slot.conn
         return self.rendezvous(key, my_conn, timeout)
+
+    def rendezvous_and_pump(self, key, my_conn, timeout: float = SLOT_TIMEOUT) -> None:
+        """`rendezvous()` + `pump()`-u BİRLİKDƏ, TƏHLÜKƏSİZ şəkildə idarə edir.
+
+        VACİB (real tapılmış bug): sadəcə `rendezvous()` çağırıb, hər İKİ
+        tərəfin ÖZ-ÖZLƏRİNƏ ayrıca `pump(conn, peer)` çağırması — məsələn
+        HTTP handler-in özündə — YALNIZ BİR tərəfin `pump()` çağırmalı
+        olduğunu təmin ETMİR. Hər iki tərəf ayrıca `pump()` çağırsa, EYNİ
+        iki socket arasında 4 (2×2) thread eyni vaxtda `.recv()`/`.send()`
+        edir — klassik race condition: heç bir xəta atılmır, sadəcə hər
+        iki tərəf `_read_exact`-də əbədi qalır (bir thread digərinin
+        gözlədiyi baytları "oğurlayır"). Yerli test mühitində (aşağı
+        gecikmə) bu, təsadüfən "işləyə" bilər, real şəbəkə gecikməsi
+        altında (Render kimi) demək olar ki, həmişə heç bir kadr keçmir.
+
+        Ona görə: YALNIZ "ikinci" gələn tərəf `pump()`-ı çağırır. "İlk"
+        gələn tərəf (öz HTTP handler thread-i, socket-i AÇIQ saxlamaq
+        üçün) sadəcə pump bitənə qədər gözləyir.
+        """
+        with self._lock:
+            slot = self._slots.get(key)
+            if slot is None:
+                slot = _Slot(my_conn)
+                self._slots[key] = slot
+                am_first = True
+            else:
+                am_first = False
+
+        if am_first:
+            if not slot.event.wait(timeout):
+                with self._lock:
+                    if self._slots.get(key) is slot:
+                        del self._slots[key]
+                try:
+                    my_conn.close()
+                except Exception:
+                    pass
+                return
+            # İkinci tərəf artıq pump-u başladıb (ya da elə indi başladır)
+            # — biz sadəcə o bitənə qədər bu HTTP handler thread-ini
+            # (və beləliklə socket-i) açıq saxlayırıq.
+            slot.pump_done.wait()
+            return
+
+        with self._lock:
+            current = self._slots.get(key)
+            if current is not slot or current.peer is not None:
+                pass   # ilk tərəf bu aralıqda vaxtı bitib silinib — aşağıda yenidən "ilk" kimi başla
+            else:
+                del self._slots[key]
+                slot.peer = my_conn
+                slot.event.set()
+                try:
+                    pump(slot.conn, my_conn)
+                finally:
+                    slot.pump_done.set()
+                return
+        self.rendezvous_and_pump(key, my_conn, timeout)
 
 
 def pump(conn_a, conn_b) -> None:
