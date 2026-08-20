@@ -16,11 +16,13 @@ services:
     env: python
     plan: starter
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "python auth_server.py"
+    startCommand: "python -u auth_server.py"
     healthCheckPath: /api/health
     envVars:
       - key: CSG_HOST
         value: "0.0.0.0"
+      - key: PYTHONUNBUFFERED
+        value: "1"
       - key: CSG_DB
         value: /var/data/server_users.db
       - key: CSG_BACKUP_DIR
